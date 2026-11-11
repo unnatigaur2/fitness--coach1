@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { dayTotals, dietInputSchema, dietIsReady, isOffTarget, deviation, optionTotals, proteinFirst, type DietContent } from './nutrition.ts';
+import { dayTotals, dietInputSchema, dietIsReady, FOODS, foodById, isOffTarget, deviation, nutritionFor, optionTotals, proteinFirst, scaleContent, scaleFactor, type DietContent } from './nutrition.ts';
 
-const FOOD = '11111111-1111-4111-8111-111111111111';
+const FOOD = 'paneer';
 const input = (over: object = {}) => ({
   calorieTarget: 2000,
   proteinTarget: 120,
@@ -54,5 +54,39 @@ describe('totals and readiness', () => {
   });
   it('puts the protein source first and keeps the rest in order', () => {
     expect(proteinFirst([{ proteinSource: false, n: 1 }, { proteinSource: true, n: 2 }, { proteinSource: false, n: 3 }]).map((x) => x.n)).toEqual([2, 1, 3]);
+  });
+});
+
+describe('the fixed food list', () => {
+  it('has ten foods with unique ids, and works nutrition out per 100 g', () => {
+    expect(FOODS).toHaveLength(10);
+    expect(new Set(FOODS.map((food) => food.id)).size).toBe(10);
+    expect(nutritionFor(foodById('wheat-roti')!, 80)).toEqual({ kcal: 237.6, proteinG: 8.8, carbsG: 40, fatG: 3.2, fibreG: 2.4 });
+    expect(dietInputSchema.safeParse(input({ slots: [{ name: 'X', logsAs: 'lunch', options: [{ name: 'A', note: '', ingredients: [{ foodId: 'not-a-food', grams: 10, label: null, proteinSource: false }] }] }] })).success).toBe(false);
+  });
+});
+
+describe('scaling to a calorie target', () => {
+  const paneer = foodById('paneer')!;
+  const roti = foodById('wheat-roti')!;
+  const make = (g1: number, g2: number): DietContent =>
+    content([
+      { name: 'B', logsAs: 'breakfast', options: [{ name: '1', note: '', ingredients: [{ foodId: 'paneer', name: 'Paneer', grams: g1, label: null, proteinSource: true, ...nutritionFor(paneer, g1) }, { foodId: 'wheat-roti', name: 'Wheat roti', grams: g2, label: null, proteinSource: false, ...nutritionFor(roti, g2) }] }] },
+    ]);
+  it('works out the factor from the day total, and has none without a target or a total', () => {
+    const c = make(100, 80); // 265 + 237.6 = 502.6 kcal
+    expect(scaleFactor(c, 1005.2)).toBeCloseTo(2);
+    expect(scaleFactor(c, null)).toBeNull();
+    expect(scaleFactor(content([]), 2000)).toBeNull();
+  });
+  it('scales to whole grams within 1 to 5000, works the nutrition out again, and lands near the target', () => {
+    const c = make(100, 80);
+    const scaled = scaleContent(c, 2);
+    expect(scaled.slots[0]!.options[0]!.ingredients.map((i) => i.grams)).toEqual([200, 160]);
+    expect(scaled.slots[0]!.options[0]!.ingredients[0]).toMatchObject({ kcal: 530, proteinG: 36.6 });
+    expect(Math.abs(dayTotals(scaleContent(c, scaleFactor(c, 2100)!)).kcal - 2100) / 2100).toBeLessThan(0.02);
+    expect(scaleContent(make(1, 1), 0.01).slots[0]!.options[0]!.ingredients.map((i) => i.grams)).toEqual([1, 1]);
+    expect(scaleContent(make(4000, 4000), 5).slots[0]!.options[0]!.ingredients.map((i) => i.grams)).toEqual([5000, 5000]);
+    expect(c.slots[0]!.options[0]!.ingredients[0]!.grams).toBe(100); // the original is untouched
   });
 });

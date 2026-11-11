@@ -1,6 +1,5 @@
 // Nutrition management routes (CF07). For a Coach or Head Coach; every handler also checks that the
 // template or client is theirs to see (invariant 1).
-//   GET  /v1/foods?q=                        search the FitSphere food list (two letters at least)
 //   GET/POST /v1/diet-templates              list (?q ?goal ?includeInactive) / create
 //   GET/PUT  /v1/diet-templates/{id}         one / edit
 //   POST /v1/diet-templates/{id}/copy | /deactivate | /activate
@@ -11,7 +10,7 @@
 //   POST /v1/diet-plans/{id}/end | /discard | /restore
 import {
   API_BASE_PATH,
-  assignPlanRequestSchema,
+  assignDietPlanRequestSchema,
   DIET_GOALS,
   dietTemplateRequestSchema,
   idSchema,
@@ -26,7 +25,7 @@ import type { z } from 'zod';
 import { requireAccount } from '../access.ts';
 import {
   assignDietPlans, copyDietTemplate, createDietTemplate, dietPlanHistory, discardDietPlan, endDietPlan, getDietPlan, getDietTemplate,
-  listDietPlans, listDietTemplates, publishDietPlan, restoreDietPlan, searchFoods, setDietTemplateActive, updateDietPlan, updateDietTemplate,
+  listDietPlans, listDietTemplates, publishDietPlan, restoreDietPlan, setDietTemplateActive, updateDietPlan, updateDietTemplate,
 } from '../diet.ts';
 import { ApiError } from '../errors.ts';
 
@@ -54,10 +53,6 @@ export function registerDietRoutes(app: FastifyInstance, deps: { db: pg.Pool | P
     return value;
   }
   const route = { config: { access: 'coach' as const } };
-
-  app.get(`${API_BASE_PATH}/foods`, route, async (request) => ({
-    foods: await searchFoods(deps.db, option(request.query as Record<string, unknown>, 'q', null) ?? ''),
-  }));
 
   app.get(`${API_BASE_PATH}/diet-templates`, route, async (request) => {
     const query = request.query as Record<string, unknown>;
@@ -97,7 +92,7 @@ export function registerDietRoutes(app: FastifyInstance, deps: { db: pg.Pool | P
     return listDietPlans(deps.db, requireAccount(request), { q: option(query, 'q', null), status: option(query, 'status', PLAN_STATUSES), coachId: coachId?.data });
   });
   app.post(`${API_BASE_PATH}/diet-plans`, route, async (request, reply) => {
-    const plans = await assignDietPlans(pool(), requireAccount(request), body(request, assignPlanRequestSchema));
+    const plans = await assignDietPlans(pool(), requireAccount(request), body(request, assignDietPlanRequestSchema));
     request.log.info({ event: 'diet_plans_assigned', userId: requireAccount(request).id, count: plans.length }, 'diet plans assigned');
     return reply.status(201).send({ plans });
   });

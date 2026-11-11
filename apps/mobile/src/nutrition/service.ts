@@ -7,7 +7,6 @@ import type {
   DietPlanSummary,
   DietTemplateDetail,
   DietTemplateSummary,
-  FoodSummary,
   PlanHistoryResponse,
 } from '@fitsphere-coach/shared';
 import type { AuthDeps } from '../auth/service';
@@ -15,10 +14,6 @@ import { call, type Result } from '../workouts/service';
 
 const enc = encodeURIComponent;
 const unwrap = <T, K extends string>(result: Result<Record<K, T>>, key: K): Result<T> => (result.kind === 'ok' ? { kind: 'ok', body: result.body[key] } : result);
-
-export async function searchFoods(deps: AuthDeps, q: string): Promise<Result<FoodSummary[]>> {
-  return unwrap(await call<{ foods: FoodSummary[] }>(deps, `/foods?q=${enc(q.trim())}`), 'foods');
-}
 
 export async function loadDietTemplates(deps: AuthDeps, filter: { q?: string; goal?: string; includeInactive?: boolean } = {}): Promise<Result<DietTemplateSummary[]>> {
   const params = new URLSearchParams();
@@ -65,8 +60,8 @@ export async function loadDietPlan(deps: AuthDeps, id: string): Promise<Result<D
   return unwrap(await call<{ plan: DietPlanDetail }>(deps, `/diet-plans/${enc(id)}`), 'plan');
 }
 
-export async function assignDietPlans(deps: AuthDeps, templateId: string, traineeIds: string[], startDate: string): Promise<Result<DietPlanSummary[]>> {
-  return unwrap(await call<{ plans: DietPlanSummary[] }>(deps, '/diet-plans', 'POST', { templateId, traineeIds, startDate }), 'plans');
+export async function assignDietPlans(deps: AuthDeps, templateId: string, traineeIds: string[], startDate: string, scale: boolean): Promise<Result<DietPlanSummary[]>> {
+  return unwrap(await call<{ plans: DietPlanSummary[] }>(deps, '/diet-plans', 'POST', { templateId, traineeIds, startDate, scale }), 'plans');
 }
 
 export async function saveDietPlan(deps: AuthDeps, id: string, request: { name: string; startDate: string; content: DietInput }): Promise<Result<DietPlanDetail>> {

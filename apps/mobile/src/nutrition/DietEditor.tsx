@@ -2,15 +2,13 @@
 // §2.2 to §2.5): targets, a note, meal slots (a custom slot "logs as" one of the four app meals), options
 // with ingredients from the FitSphere food list, the protein source first, and live totals against the
 // targets. The server checks and fills in everything again; this only helps the coach build.
-import { dayTotals, DIET_DISCLAIMER, MAX_INGREDIENTS, MAX_OPTIONS, MAX_SLOTS, MEAL_TYPES, optionTotals, type DietContent, type DietOption, type DietSlot, type FoodSummary, type Nutrition } from '@fitsphere-coach/shared';
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { dayTotals, DIET_DISCLAIMER, FOODS, MAX_INGREDIENTS, MAX_OPTIONS, MAX_SLOTS, MEAL_TYPES, optionTotals, type DietContent, type DietOption, type DietSlot, type Food, type Nutrition } from '@fitsphere-coach/shared';
+import { useState } from 'react';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useAuth } from '../auth/AuthProvider';
 import { Banner, Field, Icon, PrimaryButton, SecondaryButton, textStyles } from '../components/ui';
 import { fonts, radius, useTheme } from '../theme';
 import { ActionLink, Card, Chip, NumField, SectionLabel } from '../workouts/parts';
-import { searchFoods } from './service';
 import { deviationText, DIET_TEXTS, ingredientFrom, ingredientSummary, MEAL_LABELS, newOption, numText, offTarget, totalsText, withGrams, withProteinSource } from './texts';
 
 type Props = { content: DietContent; onChange: (content: DietContent) => void; disabled?: boolean };
@@ -264,40 +262,19 @@ function OptionModal({ visible, slotName, option, onChange, onRemove, onClose }:
   );
 }
 
-/** Search the FitSphere food list, then choose how much (grams or one of the food's servings). */
-function FoodPicker({ visible, onClose, onAdd }: { visible: boolean; onClose: () => void; onAdd: (food: FoodSummary, grams: number, label: string | null) => void }) {
-  const { deps } = useAuth();
+/** The ten fixed foods, filtered by what is typed, then how much (grams or one of the food's servings). */
+function FoodPicker({ visible, onClose, onAdd }: { visible: boolean; onClose: () => void; onAdd: (food: Food, grams: number, label: string | null) => void }) {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const [search, setSearch] = useState('');
-  const [foods, setFoods] = useState<FoodSummary[] | null>(null);
-  const [problem, setProblem] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [picked, setPicked] = useState<FoodSummary | null>(null);
+  const [picked, setPicked] = useState<Food | null>(null);
   const [grams, setGrams] = useState<number | null>(100);
   const [label, setLabel] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!visible) return;
-    const timer = setTimeout(() => {
-      if (search.trim().length < 2) {
-        setFoods(null);
-        return;
-      }
-      setLoading(true);
-      void searchFoods(deps, search).then((result) => {
-        setLoading(false);
-        setProblem(result.kind !== 'ok');
-        setFoods(result.kind === 'ok' ? result.body : null);
-      });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [deps, search, visible]);
+  const foods = FOODS.filter((food) => food.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   function close() {
     setPicked(null);
     setSearch('');
-    setFoods(null);
     onClose();
   }
 
@@ -314,15 +291,9 @@ function FoodPicker({ visible, onClose, onAdd }: { visible: boolean; onClose: ()
           <View style={{ marginTop: 16 }}>
             <Field label="Search foods" value={search} onChangeText={setSearch} placeholder="Search foods" autoCapitalize="none" autoCorrect={false} />
           </View>
-          {loading ? <ActivityIndicator color={colors.accent} accessibilityLabel="Searching" style={{ marginTop: 16 }} /> : null}
-          {problem ? (
-            <View style={{ marginTop: 16 }}>
-              <Banner kind="error">Something went wrong. Try again later.</Banner>
-            </View>
-          ) : null}
-          {foods && foods.length === 0 && !loading ? <Text style={[textStyles.body, { color: colors.inkMuted, textAlign: 'center', marginTop: 24 }]}>No foods match.</Text> : null}
+          {foods.length === 0 ? <Text style={[textStyles.body, { color: colors.inkMuted, textAlign: 'center', marginTop: 24 }]}>No foods match.</Text> : null}
           <View style={{ marginTop: 16, gap: 8 }}>
-            {foods?.map((food) => {
+            {foods.map((food) => {
               const on = picked?.id === food.id;
               return (
                 <Pressable
@@ -353,7 +324,7 @@ function FoodPicker({ visible, onClose, onAdd }: { visible: boolean; onClose: ()
               <Text style={[textStyles.label, { color: colors.inkMuted }]}>{`QUANTITY OF ${picked.name.toUpperCase()}`}</Text>
               <View style={styles.chips} accessibilityRole="radiogroup" accessibilityLabel="Serving">
                 <Chip label="Grams" selected={label === null} onPress={() => setLabel(null)} />
-                {picked.portions.slice(0, 6).map((portion) => (
+                {picked.portions.map((portion) => (
                   <Chip
                     key={portion.label}
                     label={`${portion.label} · ${numText(portion.grams)} g`}

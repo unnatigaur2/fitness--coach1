@@ -7,7 +7,8 @@ import {
   type DietIngredient,
   type DietInput,
   type DietOption,
-  type FoodSummary,
+  type Food,
+  nutritionFor,
   type MealType,
   type Nutrition,
 } from '@fitsphere-coach/shared';
@@ -30,21 +31,9 @@ export function newDietContent(): DietContent {
 
 export const newOption = (number: number): DietOption => ({ name: `Option ${number}`, note: '', ingredients: [] });
 
-/** The nutrition of `grams` of a food, rounded to one decimal (the server does the same sum). */
-export function ingredientFrom(food: FoodSummary, grams: number, label: string | null, proteinSource: boolean): DietIngredient {
-  const scale = grams / 100;
-  return {
-    foodId: food.id,
-    name: food.name,
-    grams,
-    label,
-    proteinSource,
-    kcal: round1(food.per100g.kcal * scale),
-    proteinG: round1(food.per100g.proteinG * scale),
-    carbsG: round1(food.per100g.carbsG * scale),
-    fatG: round1(food.per100g.fatG * scale),
-    fibreG: round1(food.per100g.fibreG * scale),
-  };
+/** The ingredient for `grams` of a food, with its nutrition worked out the way the server does. */
+export function ingredientFrom(food: Food, grams: number, label: string | null, proteinSource: boolean): DietIngredient {
+  return { foodId: food.id, name: food.name, grams, label, proteinSource, ...nutritionFor(food, grams) };
 }
 
 /** Changes the grams of a stored ingredient, keeping its nutrition in step with the old quantity. */
@@ -106,7 +95,10 @@ export const DIET_TEXTS = {
   noMatch: 'Nothing matches.',
   invalid: 'Some values are not valid. Check the quantities and that each option has at most one protein source.',
   notReady: 'Every slot needs an option, and every option needs ingredients with exactly one protein source, before publishing.',
-  assignInfo: "The plan is copied as it is. Quantities are not changed to match each client's targets. Nothing goes live until you publish.",
+  assignInfo: 'Each client gets their own draft to review. Nothing goes live until you publish. Later edits to the template never change these drafts.',
+  scaleTitle: "Scale to each client's calories",
+  scaleOn: "Quantities are scaled so option 1 of each slot adds up to the client's calorie target, and the plan takes their targets. A client with no calorie target gets the template as it is.",
+  scaleOff: 'Quantities are copied as they are.',
   replaceInfo: (name: string) => `${name} already has an active plan. When you publish the new one, it replaces the old one.`,
   draftBanner: (version: number, name: string) => `Draft, version ${version}. ${name} can't see this yet.`,
   unpublishedBanner: (live: number, name: string) => `You have changes that are not published. ${name} still sees version ${live}.`,
@@ -119,5 +111,5 @@ export const DIET_TEXTS = {
   offTargetBanner: 'More than 10% off target. This is a warning, not a block.',
   slotInfo: 'A custom slot logs as one of the four meals the FitSphere app knows, so a planned meal logs cleanly.',
   proteinInfo: 'Mark exactly one ingredient as the protein source. It is always shown first.',
-  foodInfo: 'Foods from the FitSphere food list, the same one clients log from.',
+  foodInfo: 'Ten foods for now. More will be added later.',
 } as const;

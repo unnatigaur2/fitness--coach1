@@ -1,17 +1,5 @@
 -- TCR-004 as proposed (docs/handoff/trainee-app/TCR-004-diet-plans.md), so publishing a diet plan can
 -- be tested before Developer 1 delivers the real table. Test database only: never applied to Supabase.
--- Also app.food_portions, which exists in the real database but not in the copied trainee migrations.
-create table app.food_portions (
-  source text not null,
-  code text not null,
-  seq integer not null check (seq between 1 and 99),
-  label text not null check (char_length(label) between 1 and 80),
-  grams numeric not null check (grams > 0 and grams <= 2000),
-  primary key (source, code, seq),
-  unique (source, code, label),
-  foreign key (source, code) references app.foods (source, code) on delete cascade
-);
-alter table app.food_portions enable row level security;
 
 create table app.diet_plans (
   id uuid primary key,

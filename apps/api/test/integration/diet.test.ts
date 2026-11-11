@@ -1,7 +1,7 @@
-// Nutrition management (CF07) against schemas app and coach on the test database: the food list,
-// diet templates (nutrition filled in by the server), drafts, publishing into app.diet_plans (TCR-004 as
-// proposed), versions and the change log. Synthetic data only.
-import { randomUUID } from 'node:crypto';
+// Nutrition management (CF07) against schemas app and coach on the test database: diet templates
+// (nutrition filled in by the server from the fixed food list), drafts, scaling to a client's calorie
+// target, publishing into app.diet_plans (TCR-004 as proposed), versions and the change log. Synthetic data only.
+import { dayTotals } from '@fitsphere-coach/shared';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../../src/app.ts';
@@ -13,18 +13,8 @@ let client: pg.Client;
 let db: pg.Pool;
 let keys: TestKeys;
 let app: ReturnType<typeof buildApp>;
-let PANEER: string; // 265 kcal, 18 g protein per 100 g
-let ROTI: string; // 297 kcal, 11 g protein per 100 g
-let HIDDEN: string;
-
-async function food(code: string, name: string, kcal: number, protein: number, opts: { hidden?: boolean; aliases?: string[] } = {}) {
-  const { rows } = await client.query(
-    `insert into app.foods (source, code, name, food_group, protein_g, fibre_g, fat_g, carbs_g, kcal, kcal_source, estimated, needs_review, hidden, aliases)
-     values ('ifct2017', $1, $2, 'Test group', $3, 2, 10, 20, $4, 'published', false, false, $5, $6) returning id`,
-    [code, name, protein, kcal, opts.hidden ?? false, opts.aliases ?? []],
-  );
-  return rows[0].id as string;
-}
+const PANEER = 'paneer'; // 265 kcal, 18.3 g protein per 100 g
+const ROTI = 'wheat-roti'; // 297 kcal, 11 g protein per 100 g
 
 beforeAll(async () => {
   client = await connect();
@@ -33,11 +23,6 @@ beforeAll(async () => {
   keys = testAuth.keys;
   app = buildApp({ db, auth: testAuth.auth, onboarding: testOnboarding().deps });
   await app.ready();
-  const tag = randomUUID().slice(0, 8);
-  PANEER = await food(`T-P-${tag}`, `Paneer ${tag}`, 265, 18, { aliases: ['cottage cheese'] });
-  ROTI = await food(`T-R-${tag}`, `Wheat roti ${tag}`, 297, 11);
-  HIDDEN = await food(`T-H-${tag}`, `Hidden food ${tag}`, 100, 1, { hidden: true });
-  await client.query(`insert into app.food_portions (source, code, seq, label, grams) values ('ifct2017', $1, 1, '1 katori', 100)`, [`T-P-${tag}`]);
 });
 afterAll(async () => {
   await app.close();
@@ -86,26 +71,11 @@ async function makeTemplate(subject: string, over: object = {}) {
   expect(res.statusCode).toBe(201);
   return res.json().template as { id: string; content: { slots: { options: { ingredients: { name: string; kcal: number; proteinSource: boolean }[] }[] }[] } };
 }
-const assign = (subject: string, templateId: string, traineeIds: string[]) => call('POST', '/v1/diet-plans', subject, { templateId, traineeIds, startDate: future() });
+const assign = (subject: string, templateId: string, traineeIds: string[], scale = false) => call('POST', '/v1/diet-plans', subject, { templateId, traineeIds, startDate: future(), scale });
 const planRow = async (id: string) => (await client.query('select * from coach.diet_plans where id = $1', [id])).rows[0];
 const startOf = async (id: string) => (await client.query(`select to_char(start_date, 'YYYY-MM-DD') as d from coach.diet_plans where id = $1`, [id])).rows[0].d as string;
 const actions = async (id: string) => (await client.query('select action from coach.diet_plan_changes where plan_id = $1 order by created_at, id', [id])).rows.map((r) => r.action as string);
 const appRow = async (id: string) => (await client.query('select * from app.diet_plans where id = $1', [id])).rows[0];
-
-describe('foods', () => {
-  it('finds foods by name or alias with their servings, never a hidden one, and needs two letters', async () => {
-    const g = await gym();
-    const byName = await call('GET', '/v1/foods?q=paneer', g.ravi.subject);
-    const paneer = byName.json().foods.find((f: { id: string }) => f.id === PANEER);
-    expect(paneer).toMatchObject({ per100g: { kcal: 265, proteinG: 18 }, portions: [{ label: '1 katori', grams: 100 }] });
-    const byAlias = await call('GET', '/v1/foods?q=cottage', g.ravi.subject);
-    expect(byAlias.json().foods.map((f: { id: string }) => f.id)).toContain(PANEER);
-    expect((await call('GET', '/v1/foods?q=hidden food', g.ravi.subject)).json().foods.map((f: { id: string }) => f.id)).not.toContain(HIDDEN);
-    expect((await call('GET', '/v1/foods?q=p', g.ravi.subject)).json().foods).toEqual([]);
-    expect((await call('GET', '/v1/foods?q=%25', g.ravi.subject)).json().foods).toEqual([]);
-    expect((await call('GET', '/v1/foods?q=paneer', g.underRavi.subject)).statusCode).toBe(403);
-  });
-});
 
 describe('diet templates', () => {
   it('fills in names and nutrition from the food list, scaled to the grams, with the protein source first', async () => {
@@ -113,9 +83,9 @@ describe('diet templates', () => {
     const made = await makeTemplate(g.ravi.subject);
     const ingredients = made.content.slots[0]?.options[0]?.ingredients ?? [];
     expect(ingredients.map((i) => i.proteinSource)).toEqual([true, false]);
-    expect(ingredients[0]).toMatchObject({ foodId: PANEER, kcal: 265, proteinG: 18, grams: 100 });
+    expect(ingredients[0]).toMatchObject({ foodId: PANEER, kcal: 265, proteinG: 18.3, grams: 100 });
     expect(ingredients[1]).toMatchObject({ foodId: ROTI, kcal: 237.6, proteinG: 8.8, grams: 80 });
-    expect(ingredients[0]?.name).toMatch(/^Paneer /);
+    expect(ingredients[0]?.name).toBe('Paneer');
   });
 
   it('ignores nutrition the app sends: the app cannot make up totals', async () => {
@@ -125,12 +95,11 @@ describe('diet templates', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('refuses an unknown or hidden food, two protein sources, a bad slot type, and too many options', async () => {
+  it('refuses an unknown food, two protein sources, a bad slot type, and too many options', async () => {
     const g = await gym();
     const bad = async (slots: object[]) => (await call('POST', '/v1/diet-templates', g.ravi.subject, template({ content: content({ slots }) }))).statusCode;
     const slot = (over: object = {}) => ({ name: 'B', logsAs: 'breakfast', options: [option()], ...over });
-    expect(await bad([slot({ options: [option({ ingredients: [ing(randomUUID(), 50, true)] })] })])).toBe(400);
-    expect(await bad([slot({ options: [option({ ingredients: [ing(HIDDEN, 50, true)] })] })])).toBe(400);
+    expect(await bad([slot({ options: [option({ ingredients: [ing('not-a-food', 50, true)] })] })])).toBe(400);
     expect(await bad([slot({ options: [option({ ingredients: [ing(PANEER, 50, true), ing(ROTI, 50, true)] })] })])).toBe(400);
     expect(await bad([slot({ logsAs: 'brunch' })])).toBe(400);
     expect(await bad([slot({ options: [option(), option(), option(), option()] })])).toBe(400);
@@ -170,7 +139,7 @@ describe('diet plans', () => {
   }
   const publish = (subject: string, id: string) => call('POST', `/v1/diet-plans/${id}/publish`, subject);
 
-  it('assigns drafts as they are (quantities are not rescaled), is all or none, and refuses a second draft', async () => {
+  it('assigns drafts as they are when not scaling, is all or none, and refuses a second draft', async () => {
     const g = await gym();
     const made = await makeTemplate(g.head.subject);
     await client.query(`insert into app.targets (user_id, kind, value, set_at) values ($1, 'calories', 2100, now()), ($1, 'protein', 140, now())`, [g.underRavi.id]);
@@ -189,6 +158,33 @@ describe('diet plans', () => {
     const again = await assign(g.head.subject, made.id, [g.underRavi.id]);
     expect(again.statusCode).toBe(409);
     expect(again.json().error.code).toBe('PLAN_DRAFT_EXISTS');
+  });
+
+  it("scales the quantities to the client's calorie target and takes their targets; the template is not changed", async () => {
+    const g = await gym();
+    const made = await makeTemplate(g.head.subject);
+    await client.query(`insert into app.targets (user_id, kind, value, set_at) values ($1, 'calories', 2100, now()), ($1, 'protein', 140, now())`, [g.underRavi.id]);
+    const res = await assign(g.ravi.subject, made.id, [g.underRavi.id], true);
+    expect(res.statusCode).toBe(201);
+    const plan = (await call('GET', `/v1/diet-plans/${res.json().plans[0].id}`, g.ravi.subject)).json().plan;
+    expect(plan.calorieTarget).toBe(2100);
+    expect(plan.content.proteinTarget).toBe(140);
+    const total = dayTotals(plan.content).kcal;
+    expect(Math.abs(total - 2100) / 2100).toBeLessThan(0.02);
+    // Every ingredient grew by about the same factor, and its nutrition was worked out again.
+    const original = (await call('GET', `/v1/diet-templates/${made.id}`, g.ravi.subject)).json().template.content;
+    expect(plan.content.slots[0].options[0].ingredients[0].grams).toBeGreaterThan(original.slots[0].options[0].ingredients[0].grams * 3);
+    expect(plan.content.slots[0].options[0].ingredients[0].kcal).toBeCloseTo((265 * plan.content.slots[0].options[0].ingredients[0].grams) / 100, 0);
+    expect(original.slots[0].options[0].ingredients[0].grams).toBe(100);
+  });
+
+  it('copies the template as it is when scaling but the client has no calorie target', async () => {
+    const g = await gym();
+    const made = await makeTemplate(g.head.subject);
+    const res = await assign(g.ravi.subject, made.id, [g.underRavi.id], true);
+    const plan = (await call('GET', `/v1/diet-plans/${res.json().plans[0].id}`, g.ravi.subject)).json().plan;
+    expect(plan.content.slots[0].options[0].ingredients[0].grams).toBe(100);
+    expect(plan.calorieTarget).toBe(1800);
   });
 
   it("a Coach sees only their clients' plans; the Head Coach all; another gym none", async () => {

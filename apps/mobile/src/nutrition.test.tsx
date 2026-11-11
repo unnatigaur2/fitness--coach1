@@ -7,6 +7,7 @@ import DietHistory from './app/diet-history';
 import DietPlan from './app/diet-plan';
 import DietTemplate from './app/diet-template';
 import Nutrition from './app/nutrition';
+import { FOODS, type Food } from '@fitsphere-coach/shared';
 import { deps, errorBody, fakeApi, fakeClient, Providers, session } from './testing/fakes';
 import { deviationText, ingredientFrom, newDietContent, offTarget, toInput, withGrams, withProteinSource } from './nutrition/texts';
 import { addDays, todayIst } from './workouts/texts';
@@ -28,11 +29,10 @@ const ARJUN = '33333333-3333-4333-8333-333333333333';
 const PRIYA = '44444444-4444-4444-8444-444444444444';
 const TEMPLATE = '55555555-5555-4555-8555-555555555555';
 const PLAN = '66666666-6666-4666-8666-666666666666';
-const PANEER = '77777777-7777-4777-8777-777777777777';
+const PANEER = 'paneer';
 const me = (roles: string[]) => ({ user: { id: ME, email: 'coach@example.test', createdAt: '2026-11-03T08:00:00Z' }, roles, coach: { fullName: 'Asha Rao' } });
 
-const paneerFood = { id: PANEER, name: 'Paneer', group: 'Milk products', per100g: { kcal: 265, proteinG: 18, carbsG: 3, fatG: 20, fibreG: 0 }, portions: [{ label: '1 katori', grams: 100 }] };
-const ingredient = (over: object = {}) => ({ foodId: PANEER, name: 'Paneer', grams: 100, label: null, proteinSource: true, kcal: 265, proteinG: 18, carbsG: 3, fatG: 20, fibreG: 0, ...over });
+const ingredient = (over: object = {}) => ({ foodId: PANEER, name: 'Paneer', grams: 100, label: null, proteinSource: true, kcal: 265, proteinG: 18.3, carbsG: 1.2, fatG: 20.8, fibreG: 0, ...over });
 const content = (over: object = {}) => ({
   calorieTarget: 2100,
   proteinTarget: 140,
@@ -75,16 +75,16 @@ async function open(element: React.ReactElement, roles: string[], responses: { s
 
 describe('nutrition texts', () => {
   it('scales a food to the grams the way the server does, and keeps the protein source first', () => {
-    const roti = ingredientFrom({ ...paneerFood, id: 'r', name: 'Roti', per100g: { kcal: 297, proteinG: 11, carbsG: 50, fatG: 4, fibreG: 3 } }, 80, '2 pieces', false);
-    expect(roti).toMatchObject({ kcal: 237.6, proteinG: 8.8, grams: 80, label: '2 pieces' });
+    const roti = ingredientFrom(FOODS.find((food) => food.id === 'wheat-roti') as Food, 80, '2 pieces', false);
+    expect(roti).toMatchObject({ name: 'Wheat roti', kcal: 237.6, proteinG: 8.8, grams: 80, label: '2 pieces' });
     const sorted = withProteinSource([roti, ingredient() as never], 1, true);
-    expect(sorted.map((i) => i.name)).toEqual(['Paneer', 'Roti']);
+    expect(sorted.map((i) => i.name)).toEqual(['Paneer', 'Wheat roti']);
     expect(sorted.filter((i) => i.proteinSource)).toHaveLength(1);
     expect(withProteinSource([ingredient() as never], 0, false)[0]?.proteinSource).toBe(false);
   });
 
   it('keeps nutrition in step when the grams change', () => {
-    expect(withGrams(ingredient() as never, 150)).toMatchObject({ grams: 150, kcal: 397.5, proteinG: 27 });
+    expect(withGrams(ingredient() as never, 150)).toMatchObject({ grams: 150, kcal: 397.5, proteinG: 27.5 });
   });
 
   it('sends only what the server needs: no names or nutrition', () => {
@@ -160,29 +160,27 @@ describe('Template editor', () => {
   });
 
   it('builds an option from the food list, marks the protein source, and saves without sending nutrition', async () => {
-    const api = await open(<DietTemplate />, ['coach'], [
-      { status: 200, body: { foods: [paneerFood] } },
-      { status: 201, body: { template: { ...summary(), content: content() } } },
-    ]);
+    const api = await open(<DietTemplate />, ['coach'], [{ status: 201, body: { template: { ...summary(), content: content() } } }]);
     await fireEvent.changeText(await screen.findByLabelText('Template name'), 'Lean 1,800');
     await fireEvent.press(screen.getByRole('button', { name: 'Add option (3 max)' }));
     await fireEvent.press(await screen.findByRole('button', { name: 'Add ingredient' }));
     await fireEvent.changeText(await screen.findByLabelText('Search foods'), 'pan');
+    expect(screen.queryByRole('radio', { name: 'Banana' })).toBeNull();
     await fireEvent.press(await screen.findByRole('radio', { name: 'Paneer' }));
     await fireEvent.press(screen.getByRole('button', { name: 'Add Paneer' }));
     expect(await screen.findByRole('button', { name: 'Paneer, 100 g' })).toBeTruthy();
-    expect(screen.getAllByLabelText('Totals: 265 kcal · 18 g protein').length).toBeGreaterThan(0);
+    expect(screen.getAllByLabelText('Totals: 265 kcal · 18.3 g protein').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Protein source/).length).toBeGreaterThan(0);
     await fireEvent.press(screen.getByRole('button', { name: 'Done' }));
     await fireEvent.press(screen.getByRole('button', { name: 'Save template' }));
     await screen.findByText('Template saved.');
-    expect(api.requests.find((r) => r.url.includes('/foods'))?.url).toBe('http://api.test/v1/foods?q=pan');
+    expect(api.requests.some((r) => r.url.includes('/foods'))).toBe(false);
     const post = api.requests.at(-1);
     expect(post).toMatchObject({ method: 'POST', url: 'http://api.test/v1/diet-templates' });
     const sent = post?.body as { name: string; content: { slots: { logsAs: string; options: { ingredients: object[] }[] }[] } };
     expect(sent.name).toBe('Lean 1,800');
     expect(sent.content.slots.map((s) => s.logsAs)).toEqual(['breakfast', 'lunch', 'snack', 'dinner']);
-    expect(sent.content.slots[0]?.options[0]?.ingredients).toEqual([{ foodId: PANEER, grams: 100, label: null, proteinSource: true }]);
+    expect(sent.content.slots[0]?.options[0]?.ingredients).toEqual([{ foodId: 'paneer', grams: 100, label: null, proteinSource: true }]);
     expect(mockRouter.replace).toHaveBeenCalledWith(`/diet-template?id=${TEMPLATE}`);
   });
 
@@ -260,13 +258,24 @@ describe('Assign diet plan', () => {
     expect(screen.getByRole('checkbox', { name: 'priya@example.test', disabled: true })).toBeTruthy();
     await fireEvent.press(screen.getByRole('checkbox', { name: 'arjun@example.test' }));
     expect(screen.getByText(/arjun@example.test already has an active plan/)).toBeTruthy();
-    expect(screen.getByText(/Quantities are not changed to match each client's targets/)).toBeTruthy();
+    expect(screen.getByText(/Quantities are scaled so option 1 of each slot adds up to the client's calorie target/)).toBeTruthy();
     await fireEvent.press(screen.getByRole('button', { name: 'Create 1 draft' }));
     await screen.findByText('Lean 1,800');
     const post = api.requests.at(-1);
     expect(post).toMatchObject({ method: 'POST', url: 'http://api.test/v1/diet-plans' });
-    expect(post?.body).toMatchObject({ templateId: TEMPLATE, traineeIds: [ARJUN], startDate: addDays(todayIst(), 1) });
+    expect(post?.body).toMatchObject({ templateId: TEMPLATE, traineeIds: [ARJUN], startDate: addDays(todayIst(), 1), scale: true });
     expect(mockRouter.replace).toHaveBeenCalledWith('/nutrition?tab=plans');
+  });
+
+  it('can copy the template as it is: the scaling switch sends scale false', async () => {
+    mockParams = { templateId: TEMPLATE };
+    const api = await open(<DietAssign />, ['coach'], [...load([]), { status: 201, body: { plans: [planSummary()] } }]);
+    await fireEvent.press(await screen.findByRole('checkbox', { name: 'arjun@example.test' }));
+    await fireEvent(screen.getByLabelText("Scale to each client's calories"), 'valueChange', false);
+    expect(await screen.findByText('Quantities are copied as they are.')).toBeTruthy();
+    await fireEvent.press(screen.getByRole('button', { name: 'Create 1 draft' }));
+    await screen.findByLabelText("Scale to each client's calories");
+    expect(api.requests.at(-1)?.body).toMatchObject({ scale: false });
   });
 
   it('shows the server answer when a client already has a draft, and asks for a client first', async () => {

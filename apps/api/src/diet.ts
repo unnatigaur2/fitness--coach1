@@ -2,15 +2,21 @@
 //
 // Same rules as workouts (workouts.ts, plans.ts); only what differs is noted here:
 // - The app sends foods by id and grams. The server reads each food's name and nutrition (per 100 g) from
-//   app.foods and stores them with the quantity, so totals cannot be made up and a plan keeps the numbers
-//   it was made with. The protein source is always stored first.
+//   the fixed food list in the shared package (ten foods for now) and stores them with the quantity, so
+//   totals cannot be made up and a plan keeps the numbers it was made with. The protein source is
+//   always stored first.
+// - Giving a template to a client can scale its quantities to the client's calorie target (`scale`).
 // - A plan is published when every slot has an option and every option has exactly one protein source.
 //   Publish writes the trainee's row in app.diet_plans and answers "not found" while that table does
 //   not exist (TCR-004, C-D22, ADR-0002 rule 2).
 import {
   dietIsReady,
+  foodById,
+  nutritionFor,
   proteinFirst,
-  type AssignPlanRequest,
+  scaleContent,
+  scaleFactor,
+  type AssignDietPlanRequest,
   type DietContent,
   type DietInput,
   type DietPlanDetail,
@@ -19,7 +25,6 @@ import {
   type DietTemplateDetail,
   type DietTemplateInput,
   type DietTemplateSummary,
-  type FoodSummary,
   type PlanChange,
   type PlanHistoryResponse,
   type PlanStatus,
@@ -33,57 +38,10 @@ import { canonical, transaction } from './plans.ts';
 import { gymOf, NOT_FOUND, roleOf } from './workouts.ts';
 
 type Queryable = Pick<pg.Pool, 'query'>;
-const round1 = (value: number) => Math.round(value * 10) / 10;
-
 // --- Foods ---
 
-type FoodRow = { id: string; source: string; code: string; name: string; food_group: string; kcal: string; protein_g: string; carbs_g: string; fat_g: string; fibre_g: string };
-
-const num = (value: string) => Number(value);
-
-/** Foods by name or alias (at least two letters), best matches first. Hidden foods are never offered. */
-export async function searchFoods(db: Queryable, q: string): Promise<FoodSummary[]> {
-  const text = q.trim();
-  if (text.length < 2) return [];
-  const { rows } = await db.query<FoodRow>(
-    `select id, source, code, name, food_group, kcal, protein_g, carbs_g, fat_g, fibre_g
-     from app.foods
-     where not hidden
-       and (strpos(lower(name), lower($1)) > 0 or exists (select 1 from unnest(aliases) a where strpos(lower(a), lower($1)) > 0))
-     order by (lower(name) like lower($1) || '%') desc, length(name), name
-     limit 30`,
-    [text],
-  );
-  const portions = new Map<string, { label: string; grams: number }[]>();
-  if (rows.length > 0 && (await db.query(`select to_regclass('app.food_portions') as t`)).rows[0]?.t !== null) {
-    const found = await db.query<{ source: string; code: string; label: string; grams: string }>(
-      `select p.source, p.code, p.label, p.grams from app.food_portions p
-       join unnest($1::text[], $2::text[]) as k(source, code) on k.source = p.source and k.code = p.code
-       order by p.seq`,
-      [rows.map((row) => row.source), rows.map((row) => row.code)],
-    );
-    for (const portion of found.rows) {
-      const key = `${portion.source}/${portion.code}`;
-      portions.set(key, [...(portions.get(key) ?? []), { label: portion.label, grams: num(portion.grams) }]);
-    }
-  }
-  return rows.map((row) => ({
-    id: row.id,
-    name: row.name,
-    group: row.food_group,
-    per100g: { kcal: num(row.kcal), proteinG: num(row.protein_g), carbsG: num(row.carbs_g), fatG: num(row.fat_g), fibreG: num(row.fibre_g) },
-    portions: portions.get(`${row.source}/${row.code}`) ?? [],
-  }));
-}
-
-/** Fills in each ingredient's name and nutrition from app.foods. An unknown or hidden food is refused. */
-export async function resolveContent(db: Queryable, input: DietInput): Promise<DietContent> {
-  const ids = [...new Set(input.slots.flatMap((slot) => slot.options.flatMap((option) => option.ingredients.map((ingredient) => ingredient.foodId))))];
-  const { rows } = ids.length
-    ? await db.query<FoodRow>('select id, source, code, name, food_group, kcal, protein_g, carbs_g, fat_g, fibre_g from app.foods where id = any($1::uuid[]) and not hidden', [ids])
-    : { rows: [] as FoodRow[] };
-  const foods = new Map(rows.map((row) => [row.id, row]));
-  if (foods.size !== ids.length) throw new ApiError('VALIDATION_FAILED', [{ field: 'content.slots', issue: 'invalid_format' }]);
+/** Fills in each ingredient's name and nutrition from the food list. An unknown food is refused (the shared schema already does). */
+export async function resolveContent(_db: Queryable, input: DietInput): Promise<DietContent> {
   return {
     calorieTarget: input.calorieTarget,
     proteinTarget: input.proteinTarget,
@@ -95,19 +53,15 @@ export async function resolveContent(db: Queryable, input: DietInput): Promise<D
         name: option.name,
         note: option.note,
         ingredients: proteinFirst(option.ingredients).map((ingredient) => {
-          const food = foods.get(ingredient.foodId) as FoodRow;
-          const scale = ingredient.grams / 100;
+          const food = foodById(ingredient.foodId);
+          if (!food) throw new ApiError('VALIDATION_FAILED', [{ field: 'content.slots', issue: 'invalid_format' }]);
           return {
             foodId: ingredient.foodId,
             name: food.name,
             grams: ingredient.grams,
             label: ingredient.label || null,
             proteinSource: ingredient.proteinSource,
-            kcal: round1(num(food.kcal) * scale),
-            proteinG: round1(num(food.protein_g) * scale),
-            carbsG: round1(num(food.carbs_g) * scale),
-            fatG: round1(num(food.fat_g) * scale),
-            fibreG: round1(num(food.fibre_g) * scale),
+            ...nutritionFor(food, ingredient.grams),
           };
         }),
       })),
@@ -357,7 +311,7 @@ export async function dietPlanHistory(db: Queryable, viewer: Account, id: string
   return { changes: await changes(db, id, 200), publishedVersions: rows.map((row) => row.version) };
 }
 
-export async function assignDietPlans(db: pg.Pool, viewer: Account, request: AssignPlanRequest): Promise<DietPlanSummary[]> {
+export async function assignDietPlans(db: pg.Pool, viewer: Account, request: AssignDietPlanRequest): Promise<DietPlanSummary[]> {
   const gym = await gymOf(db, viewer);
   const template = await findDietTemplate(db, viewer, request.templateId);
   if (!template || !template.active) throw NOT_FOUND();
@@ -374,11 +328,21 @@ export async function assignDietPlans(db: pg.Pool, viewer: Account, request: Ass
       );
       if (!rowCount) throw NOT_FOUND();
       if ((await tx.query(`select 1 from coach.diet_plans where trainee_id = $1 and status = 'draft'`, [traineeId])).rowCount) throw new ApiError('PLAN_DRAFT_EXISTS');
-      // The template is copied as it is: quantities are not changed to match the client's targets.
+      // With `scale`, the quantities are fitted to this client's calorie target (the template's day total
+      // becomes their target) and the plan takes their targets; with no calorie target, or without
+      // `scale`, the template is copied as it is.
+      let content = template.content;
+      if (request.scale) {
+        const { rows: targets } = await tx.query<{ kind: string; value: number }>(`select kind, value from app.targets where user_id = $1 and kind in ('calories', 'protein')`, [traineeId]);
+        const calories = targets.find((t) => t.kind === 'calories')?.value ?? null;
+        const protein = targets.find((t) => t.kind === 'protein')?.value ?? null;
+        const factor = scaleFactor(template.content, calories);
+        if (factor !== null) content = { ...scaleContent(template.content, factor), calorieTarget: calories, proteinTarget: protein ?? template.content.proteinTarget };
+      }
       const { rows } = await tx.query<{ id: string }>(
         `insert into coach.diet_plans (trainee_id, gym_head_coach_id, created_by, template_id, name, status, start_date, content)
          values ($1, $2, $3, $4, $5, 'draft', $6, $7) returning id`,
-        [traineeId, gym, viewer.id, template.id, template.name, request.startDate, JSON.stringify(template.content)],
+        [traineeId, gym, viewer.id, template.id, template.name, request.startDate, JSON.stringify(content)],
       );
       const id = (rows[0] as { id: string }).id;
       await log(tx, id, viewer, 'created', 1, `From template ${template.name}`.slice(0, 200));

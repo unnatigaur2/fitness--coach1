@@ -12,7 +12,7 @@ import { coachLabel } from '../clients/texts';
 import { Banner, Icon, PrimaryButton, PushedLayout, textStyles } from '../components/ui';
 import { assignDietPlans, loadDietPlans, loadDietTemplate } from '../nutrition/service';
 import { DIET_GOAL_LABELS, DIET_TEXTS } from '../nutrition/texts';
-import { Card, DateStepper, SectionLabel, Tag } from '../workouts/parts';
+import { Card, DateStepper, SectionLabel, SwitchRow, Tag } from '../workouts/parts';
 import { addDays, failureText, todayIst } from '../workouts/texts';
 import { fonts, radius, useTheme } from '../theme';
 
@@ -27,6 +27,7 @@ export default function WorkoutAssign() {
   const [withDraft, setWithDraft] = useState<Set<string>>(new Set());
   const [withActive, setWithActive] = useState<Set<string>>(new Set());
   const [picked, setPicked] = useState<string[]>([]);
+  const [scale, setScale] = useState(true);
   const [startDate, setStartDate] = useState(() => addDays(todayIst(), 1));
   const [problem, setProblem] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
@@ -63,7 +64,7 @@ export default function WorkoutAssign() {
     if (!templateId) return;
     setWorking(true);
     setProblem(null);
-    const result = await assignDietPlans(deps, templateId, picked, startDate);
+    const result = await assignDietPlans(deps, templateId, picked, startDate, scale);
     setWorking(false);
     if (result.kind === 'ok') {
       router.replace('/nutrition?tab=plans' as never);
@@ -138,6 +139,9 @@ export default function WorkoutAssign() {
             {replacing.map((client) => (
               <Banner key={client.id} kind="info">{DIET_TEXTS.replaceInfo(client.name)}</Banner>
             ))}
+            <Card>
+              <SwitchRow title={DIET_TEXTS.scaleTitle} sub={scale ? DIET_TEXTS.scaleOn : DIET_TEXTS.scaleOff} value={scale} onChange={setScale} last />
+            </Card>
             <Banner kind="info">{DIET_TEXTS.assignInfo}</Banner>
           </View>
           <View style={{ marginTop: 20 }}>
