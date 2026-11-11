@@ -18,6 +18,17 @@
       "expo-router",
       "expo-font",
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "630b412d-0724-4178-8f69-d4a4713d36b8"
+      }
+    },
+    "owner": "unnati20112002"
   }
 }
